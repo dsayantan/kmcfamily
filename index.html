@@ -88,6 +88,15 @@ mark{background:var(--hl);color:inherit;border-radius:2px}
   td.c-house:not(:empty)::before{content:"House ";color:var(--muted)}
   td.c-sl{color:var(--muted)}
 }
+@media (max-width:380px){
+  .bar{padding:10px 12px;gap:7px}
+  .actions{gap:6px}
+  .actions button{font-size:13px;padding:4px}
+  .actions .theme{flex:0 0 38px}
+  .srow select{max-width:40%;padding:6px 4px}
+  main{padding:10px 8px 40px}
+  .tile{padding:7px 8px}
+}
 </style>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 </head>
