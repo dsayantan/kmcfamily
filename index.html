@@ -57,12 +57,19 @@ mark{background:var(--hl);color:inherit;border-radius:2px}
 .empty{padding:40px;text-align:center;color:var(--muted)}
 .theme{margin-left:auto}
 .actions{display:flex;gap:8px;align-items:end}
+.srow{display:flex}
+.srow select{border-radius:7px 0 0 7px;border-right:0;background:var(--soft);max-width:150px}
+.srow input{border-radius:0 7px 7px 0;flex:1;min-width:0}
+.prog{height:3px;background:var(--line);border-radius:2px;overflow:hidden;margin:-4px 0 10px}
+.prog i{display:block;height:100%;background:var(--accent);transition:width .2s}
+.hint{color:var(--accent);font-weight:500}
 @media (max-width:700px){
   header{position:static}
   .bar{display:grid;grid-template-columns:1fr 1fr;gap:8px}
   h1,.wide,.actions{grid-column:1/-1}
   label{min-width:0}
   select,input[type=search]{width:100%;min-width:0;max-width:none}
+  .srow select{width:auto;flex:0 0 auto;max-width:44%}
   .actions button{flex:1;min-height:40px;white-space:nowrap;padding:6px}
   .actions .theme{flex:0 0 44px}
   main{padding:12px 12px 40px}
@@ -93,7 +100,10 @@ mark{background:var(--hl);color:inherit;border-radius:2px}
     <option value="2">2+</option><option value="3">3+</option><option value="4">4+</option>
     <option value="5">5+</option><option value="8">8+</option><option value="12">12+</option></select></label>
   <label>Sort<select id="sort"><option value="sl">Booth, serial</option><option value="size">Largest first</option></select></label>
-  <label class="wide">Search<input id="q" type="search" placeholder="Name, EPIC, house, father…"></label>
+  <label class="wide">Search<span class="srow"><select id="scope" title="Where to search">
+    <option value="booth">Selected booth</option><option value="ward" selected>Selected ward</option>
+    <option value="all">All wards</option></select><input id="q" type="search" enterkeyhint="search"
+    placeholder="Name, EPIC, house, father…"></span></label>
   <div class="actions">
   <button id="xlsx" class="primary" title="Download the selected ward or booth as Excel">⬇ XLSX</button>
   <button id="csv" title="Download only the families currently shown (after search / size filter), as CSV">CSV (shown)</button>
@@ -104,6 +114,7 @@ mark{background:var(--hl);color:inherit;border-radius:2px}
   <div id="tiles" class="tiles"></div>
   <div id="note"></div>
   <div class="status"><span id="count"></span><span class="pager" id="pager"></span></div>
+  <div class="prog" id="prog" hidden><i></i></div>
   <div id="list"></div>
   <div class="status"><span></span><span class="pager" id="pager2"></span></div>
 </main>
@@ -112,7 +123,11 @@ const INDEX = [{"w":1,"acs":"168-Kashipur-Belgachia","nb":26,"v":13514,"fam":307
 const PAGE = 50;
 const RT = {F:'Father',M:'Mother',H:'Husband',O:'Other'};
 const cache = {};
+const ALL_CAP = 3000;            // stop an all-wards search after this many families
+const waiters = {}, scripts = {};
 let cur = null, shown = [], page = 0, pending = null;
+let all = null;                  // {q, min, done, capped, res} of the last all-wards search
+let searchSeq = 0;
 const $ = id => document.getElementById(id);
 const fmt = n => Number(n).toLocaleString('en-IN');
 const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
@@ -131,25 +146,47 @@ $('ward').innerHTML = INDEX.map(w =>
 
 window.__wardLoaded = d => {
   cache[d.ward] = d;
-  for (const b of d.booths) {
+  d.booths.forEach((b, i) => {
     b.key = b.ac + '-' + b.b;
+    b.ward = d.ward;
+    b.idx = i;
     for (const f of b.fam) {
       f.booth = b;
       f.minsl = Math.min(...f[1].map(m => +m[0] || 0));
       f.text = f[1].map(m => [m[1], m[2], m[6], m[7]].join(' ')).join(' ').toLowerCase();
     }
-  }
-  if (pending === d.ward) { pending = null; show(d.ward); }
+  });
+  for (const [ok] of waiters[d.ward] || []) ok(d);
+  delete waiters[d.ward];
 };
 
+// Load one ward's data file; resolves with the ward object.
+function fetchWard(w) {
+  if (cache[w]) return Promise.resolve(cache[w]);
+  return new Promise((ok, fail) => {
+    if (waiters[w]) { waiters[w].push([ok, fail]); return; }
+    waiters[w] = [[ok, fail]];
+    const s = document.createElement('script');
+    s.src = 'data/w' + String(w).padStart(3, '0') + '.js';
+    s.onerror = () => { for (const [, f] of waiters[w] || []) f(w); delete waiters[w]; s.remove(); };
+    scripts[w] = s;
+    document.head.appendChild(s);
+  });
+}
+
+// Forget a ward loaded only for an all-wards search (matches keep their own refs).
+function dropWard(w) {
+  if (cur && w === cur.ward) return;
+  if (pending === w) return;
+  delete cache[w];
+  if (scripts[w]) { scripts[w].remove(); delete scripts[w]; }
+}
+
 function loadWard(w) {
-  if (cache[w]) return show(w);
   pending = w;
-  $('list').innerHTML = '<div class="empty">Loading ward ' + w + '…</div>';
-  const s = document.createElement('script');
-  s.src = 'data/w' + String(w).padStart(3, '0') + '.js';
-  s.onerror = () => { $('list').innerHTML = '<div class="empty">Could not load data for ward ' + w + '.</div>'; };
-  document.head.appendChild(s);
+  if (!cache[w]) $('list').innerHTML = '<div class="empty">Loading ward ' + w + '…</div>';
+  fetchWard(w).then(() => { if (pending === w) { pending = null; show(w); } },
+    () => { $('list').innerHTML = '<div class="empty">Could not load data for ward ' + w + '.</div>'; });
 }
 
 function show(w) {
@@ -169,24 +206,94 @@ function show(w) {
   sel.innerHTML = '<option value="">All booths</option>' + opts.join('') +
     info.miss.map(m => `<option disabled>AC ${m[0]} · Booth ${esc(m[1])} — no roll</option>`).join('');
   sel.value = cur.booths.some(b => b.key === keep) ? keep : '';
+  syncScope();
   page = 0;
   apply();
 }
 
+// "Selected booth" only makes sense with a booth picked.
+function syncScope() {
+  const sc = $('scope'), hasBooth = !!$('booth').value;
+  sc.options[0].disabled = !hasBooth;
+  if (!hasBooth && sc.value === 'booth') sc.value = 'ward';
+}
+
+function sortShown() {
+  if ($('sort').value === 'size') shown.sort((a, b) => b[1].length - a[1].length || a.minsl - b.minsl);
+  else shown.sort((a, b) => a.booth.ward - b.booth.ward || a.booth.idx - b.booth.idx || a[0] - b[0]);
+}
+
+function counted(prefix) {
+  const ppl = shown.reduce((s, f) => s + f[1].length, 0);
+  $('count').innerHTML = `${prefix}${fmt(shown.length)} families · ${fmt(ppl)} voters`;
+}
+
 function apply() {
   if (!cur) return;
-  const bk = $('booth').value, min = +$('minsz').value, q = $('q').value.trim().toLowerCase();
-  shown = [];
-  for (const b of cur.booths) {
-    if (bk && b.key !== bk) continue;
-    for (const f of b.fam) if (f[1].length >= min && (!q || f.text.includes(q))) shown.push(f);
-  }
-  if ($('sort').value === 'size') shown.sort((a, b) => b[1].length - a[1].length || a.minsl - b.minsl);
-  const ppl = shown.reduce((s, f) => s + f[1].length, 0);
-  $('count').textContent = `${fmt(shown.length)} families · ${fmt(ppl)} voters`;
+  const scope = $('scope').value, bk = $('booth').value, min = +$('minsz').value;
+  const q = $('q').value.trim().toLowerCase();
   saveHash();
   xlsxLabel();
+  if (scope === 'all') {
+    if (all && all.q === q && all.min === min && (all.done === INDEX.length || all.id === searchSeq)) {
+      shown = all.res.slice();
+      sortShown();
+      counted(all.done < INDEX.length ? `Searching all wards… ${all.done}/${INDEX.length} · `
+        : `All wards: ${all.capped ? `first ${fmt(ALL_CAP)} · ` : ''}`);
+      return render();
+    }
+    searchSeq++;            // a running search is for an older query: stop it
+    $('prog').hidden = true;
+    shown = [];
+    $('count').innerHTML = q.length >= 3
+      ? `<span class="hint">Press Enter to search all ${INDEX.length} wards for “${esc(q)}”</span>`
+      : '<span class="hint">Type at least 3 letters, then press Enter to search all wards</span>';
+    return render(true);
+  }
+  searchSeq++;
+  $('prog').hidden = true;
+  shown = [];
+  for (const b of cur.booths) {
+    if (scope === 'booth' && bk && b.key !== bk) continue;
+    for (const f of b.fam) if (f[1].length >= min && (!q || f.text.includes(q))) shown.push(f);
+  }
+  sortShown();
+  counted(scope === 'ward' && bk && q ? `Whole ward ${cur.ward}: ` : '');
   render();
+}
+
+async function searchAll() {
+  const q = $('q').value.trim().toLowerCase(), min = +$('minsz').value;
+  if (q.length < 3) return apply();
+  const id = ++searchSeq;
+  all = {q, min, id, done: 0, capped: false, res: []};
+  const queue = INDEX.map(x => x.w);
+  const bar = $('prog');
+  bar.hidden = false;
+  let last = 0;
+  const tick = force => {
+    bar.firstChild.style.width = (100 * all.done / INDEX.length) + '%';
+    if (force || Date.now() - last > 400) { last = Date.now(); page = 0; apply(); }
+  };
+  const worker = async () => {
+    while (queue.length && id === searchSeq) {
+      const w = queue.shift();
+      try {
+        const d = await fetchWard(w);
+        if (id !== searchSeq) return;
+        for (const b of d.booths) for (const f of b.fam)
+          if (f[1].length >= min && f.text.includes(q)) all.res.push(f);
+        dropWard(w);
+      } catch (e) { /* missing file: skip */ }
+      all.done++;
+      if (all.res.length >= ALL_CAP) { all.capped = true; all.res.length = ALL_CAP; all.done = INDEX.length; queue.length = 0; }
+      tick(false);
+    }
+  };
+  await Promise.all([0, 1, 2, 3].map(worker));
+  if (id !== searchSeq) return;
+  bar.hidden = true;
+  tick(true);
 }
 
 function hl(s, q) {
@@ -207,7 +314,8 @@ function links(str, mem) {
   }).join('; ');
 }
 
-function render() {
+function render(hint) {
+  if (hint) { $('list').innerHTML = ''; $('pager').innerHTML = $('pager2').innerHTML = ''; return; }
   const pages = Math.max(1, Math.ceil(shown.length / PAGE));
   page = Math.min(page, pages - 1);
   const q = $('q').value.trim().toLowerCase();
@@ -224,8 +332,8 @@ function render() {
       <td class="c-house">${hl(m[7], q)}</td>
       <td class="links">${links(m[8], mem)}</td></tr>`).join('');
     return `<div class="fam"><div class="fh">
-      <span class="id">W${cur.ward}-${b.ac}-${esc(b.b)}-F${f[0]}</span>
-      <span class="meta">AC ${b.ac} ${esc(b.acn)} · Booth ${esc(b.b)}</span>
+      <span class="id">W${b.ward}-${b.ac}-${esc(b.b)}-F${f[0]}</span>
+      <span class="meta">Ward ${b.ward} · AC ${b.ac} ${esc(b.acn)} · Booth ${esc(b.b)}</span>
       <span class="meta">${mem.length} members</span>
       <span class="meta">House ${esc(houses.join(', ') || '–')}</span></div>
       <div class="tw"><table><thead><tr><th>Sl</th><th>Name</th><th>Sex/Age</th><th>EPIC</th>
@@ -245,6 +353,8 @@ for (const id of ['pager', 'pager2']) $(id).onclick = e => {
 function saveHash() {
   const h = new URLSearchParams({w: cur.ward});
   if ($('booth').value) h.set('b', $('booth').value);
+  if ($('scope').value !== 'ward') h.set('s', $('scope').value);
+  if ($('q').value.trim()) h.set('q', $('q').value.trim());
   history.replaceState(null, '', '#' + h);
 }
 
@@ -290,27 +400,43 @@ $('csv').onclick = () => {
     'Relation Type', 'Relation Name', 'House No', 'Linked as']];
   for (const f of shown) for (const m of f[1]) {
     const b = f.booth;
-    out.push([cur.ward, b.ac, b.acn, b.b, `W${cur.ward}-${b.ac}-${b.b}-F${f[0]}`, f[1].length,
+    out.push([b.ward, b.ac, b.acn, b.b, `W${b.ward}-${b.ac}-${b.b}-F${f[0]}`, f[1].length,
       m[0], m[1], m[2], m[4], m[3], RT[m[5]] || m[5], m[6], m[7], m[8]]);
   }
   const csv = '﻿' + out.map(r => r.map(c => /[",\n]/.test(c) ? '"' + String(c).replace(/"/g, '""') + '"' : c).join(',')).join('\n');
   const a = document.createElement('a');
   a.href = URL.createObjectURL(new Blob([csv], {type: 'text/csv'}));
-  a.download = `ward_${cur.ward}${$('booth').value ? '_booth_' + $('booth').value : ''}_families.csv`;
+  const sc = $('scope').value, q = $('q').value.trim().replace(/[^\w\u0980-\u09ff-]+/g, '_');
+  a.download = sc === 'all' ? `all_wards_${q || 'search'}_families.csv`
+    : `ward_${cur.ward}${sc === 'booth' && $('booth').value ? '_booth_' + $('booth').value : ''}${q ? '_' + q : ''}_families.csv`;
   a.click();
 };
 
 let qt;
 $('q').oninput = () => { clearTimeout(qt); qt = setTimeout(() => { page = 0; apply(); }, 200); };
-$('minsz').onchange = $('sort').onchange = () => { page = 0; apply(); };
-$('booth').onchange = () => { page = 0; apply(); };
+$('q').onkeydown = e => {
+  if (e.key !== 'Enter') return;
+  clearTimeout(qt);
+  if ($('scope').value === 'all') { e.preventDefault(); $('q').blur(); searchAll(); } else { page = 0; apply(); }
+};
+$('scope').onchange = () => { page = 0; apply(); if ($('scope').value === 'all' && $('q').value.trim().length >= 3) searchAll(); };
+$('minsz').onchange = () => { page = 0; apply(); if ($('scope').value === 'all' && all && all.done === INDEX.length) searchAll(); };
+$('sort').onchange = () => { page = 0; apply(); };
+$('booth').onchange = () => {
+  if ($('booth').value && $('scope').value === 'ward') $('scope').value = 'booth';
+  syncScope(); page = 0; apply();
+};
 $('ward').onchange = () => { $('booth').value = ''; loadWard(+$('ward').value); };
 
 const h = new URLSearchParams(location.hash.slice(1));
 const w0 = INDEX.some(x => x.w === +h.get('w')) ? +h.get('w') : INDEX[0].w;
 $('ward').value = w0;
 if (h.get('b')) $('booth').innerHTML += `<option value="${esc(h.get('b'))}"></option>`, $('booth').value = h.get('b');
+if (h.get('q')) $('q').value = h.get('q');
+if (['booth', 'ward', 'all'].includes(h.get('s'))) $('scope').value = h.get('s');
+if (h.get('b') && !h.get('s')) $('scope').value = 'booth';
 loadWard(w0);
+if ($('scope').value === 'all' && $('q').value.trim().length >= 3) fetchWard(w0).then(() => searchAll());
 </script>
 </body>
 </html>
