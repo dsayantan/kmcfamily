@@ -57,6 +57,9 @@ mark{background:var(--hl);color:inherit;border-radius:2px}
 .empty{padding:40px;text-align:center;color:var(--muted)}
 .theme{margin-left:auto}
 .actions{display:flex;gap:8px;align-items:end}
+.golink{align-self:center;order:99;margin-left:auto;padding:7px 14px;border-radius:999px;border:2px solid var(--accent);
+  color:var(--accent);font-weight:700;text-decoration:none;white-space:nowrap}
+.golink:hover{background:var(--accent);color:var(--accent-ink)}
 .srow{display:flex}
 .srow select{border-radius:7px 0 0 7px;border-right:0;background:var(--soft);max-width:150px}
 .srow input{border-radius:0 7px 7px 0;flex:1;min-width:0}
@@ -66,7 +69,8 @@ mark{background:var(--hl);color:inherit;border-radius:2px}
 @media (max-width:700px){
   header{position:static}
   .bar{display:grid;grid-template-columns:1fr 1fr;gap:8px}
-  h1,.wide,.actions{grid-column:1/-1}
+  h1,.wide,.actions,.golink{grid-column:1/-1}
+  .golink{order:0;margin-left:0;text-align:center;padding:8px}
   label{min-width:0}
   select,input[type=search]{width:100%;min-width:0;max-width:none}
   .srow select{width:auto;flex:0 0 auto;max-width:44%}
@@ -103,6 +107,7 @@ mark{background:var(--hl);color:inherit;border-radius:2px}
 <body>
 <header><div class="bar">
   <h1>KMC <span>Family</span> Browser</h1>
+  <a class="golink" id="genzlink" href="genz.html" title="Every voter aged 18 to 30, by ward and booth">👥 GenZ voters 18–30 →</a>
   <label class="wide">Ward<select id="ward"></select></label>
   <label class="wide">Booth<select id="booth"><option value="">All booths</option></select></label>
   <label>Min. size<select id="minsz">
@@ -364,6 +369,7 @@ function saveHash() {
   if ($('booth').value) h.set('b', $('booth').value);
   if ($('scope').value !== 'ward') h.set('s', $('scope').value);
   if ($('q').value.trim()) h.set('q', $('q').value.trim());
+  $('genzlink').href = 'genz.html#w=' + cur.ward + ($('booth').value ? '&b=' + encodeURIComponent($('booth').value) : '');
   history.replaceState(null, '', '#' + h);
 }
 
